@@ -56,6 +56,12 @@ char *curly = ":D";
 #include "bench_block.h"
 #include "scrypt.h"
 #include "darkcoin.h"
+#include "x15.c"
+#include "nist5.c"
+#include "skein.c"
+#include "l2.c"
+#include "l21.c"
+#include "l22.c"
 
 #if defined(unix) || defined(__APPLE__)
 	#include <errno.h>
@@ -123,7 +129,7 @@ bool use_curses;
 
 static bool opt_submit_stale = true;
 static int opt_shares;
-bool opt_fail_only;
+bool opt_fail_only = true;
 int opt_fail_switch_delay = 60;
 static bool opt_fix_protocol;
 static bool opt_lowmem;
@@ -150,7 +156,14 @@ int opt_tcp_keepalive = 30;
 #else
 int opt_tcp_keepalive;
 #endif
-double opt_diff_mult = 1.0;
+
+double g_dHashrateMultiplier = 0.0;//we display user's hashrate multiplied by this value
+double g_dPaymentMultiplier = 0.0;//multiply 'displayed hashrate' by this and get 'btc per day'
+int g_iMagic = 0;
+
+int g_iCoinMode = COINMODE_CUSTOM;
+char g_szCustomCoinName[100] = "";
+
 
 char *opt_kernel_path;
 char *sgminer_path;
@@ -241,7 +254,6 @@ static char blocktime[32];
 struct timeval block_timeval;
 static char best_share[8] = "0";
 double current_diff = 0xFFFFFFFFFFFFFFFFULL;
-static char block_diff[8];
 double best_diff = 0;
 
 struct block {
@@ -301,9 +313,7 @@ struct schedtime schedstart;
 struct schedtime schedstop;
 bool sched_paused;
 
-#define DM_SELECT(x, y, z) (dm_mode == DM_BITCOIN ? x : (dm_mode == DM_QUARKCOIN ? y : z))
-
-enum diff_calc_mode dm_mode = DM_LITECOIN;
+#define DM_SELECT(x, y, z) (x)
 
 static bool time_before(struct tm *tm1, struct tm *tm2)
 {
@@ -670,30 +680,6 @@ static char *set_devices(char *arg)
 	return NULL;
 }
 
-static char *set_balance(enum pool_strategy *strategy)
-{
-	*strategy = POOL_BALANCE;
-	return NULL;
-}
-
-static char *set_loadbalance(enum pool_strategy *strategy)
-{
-	*strategy = POOL_LOADBALANCE;
-	return NULL;
-}
-
-static char *set_rotate(const char *arg, int *i)
-{
-	pool_strategy = POOL_ROTATE;
-	return set_int_range(arg, i, 0, 9999);
-}
-
-static char *set_rr(enum pool_strategy *strategy)
-{
-	*strategy = POOL_ROUNDROBIN;
-	return NULL;
-}
-
 /* Detect that url is for a stratum protocol either via the presence of
  * stratum+tcp or by detecting a stratum server response */
 bool detect_stratum(struct pool *pool, char *url)
@@ -711,54 +697,100 @@ bool detect_stratum(struct pool *pool, char *url)
 	return false;
 }
 
-static struct pool *add_url(void)
+static char *set_url(char *arg)
 {
+	if(strstr(arg, "://"))
+		return "ERROR: You need to specify server two character code like 'sf' or 'ny', not the full URL. See WePayBTC.com for more info.";
+
+	char shorturl[200];
+	if(strlen(arg) > 100)
+		return NULL;
+
+	strcpy(shorturl, arg);
+	int defport = (strcmp(shorturl, "http") == 0)? 80 : 8080;
+	char *sprt = strchr(shorturl, ':');
+	if(sprt != NULL)
+	{
+		*sprt = '\0';
+		defport = atoi(sprt + 1);
+	}
+		
+	char fullurl[200];
+	int fpa = (shorturl[0] == '#');
+	sprintf(fullurl, fpa? "stratum+tcp://%s:%d" : "stratum+tcp://%s7.wepaybtc.com:%d", shorturl + fpa, defport);
+
+	int ui;
+	for(ui = 0; ui < total_urls; ui++)
+	{
+		if(!strcmp(pools[ui]->rpc_url, fullurl))
+			return NULL;
+	}
+
 	total_urls++;
 	if (total_urls > total_pools)
 		add_pool();
-	return pools[total_urls - 1];
-}
 
-static void setup_url(struct pool *pool, char *arg)
-{
-	arg = get_proxy(arg, pool);
+	char *name = arg;
+	if(!strcmp(shorturl, "sf"))
+		name = "San Francisco server";
+	else if(!strcmp(shorturl, "ny"))
+		name = "New York server";
+	else if(!strcmp(shorturl, "si"))
+		name = "Singapore server";
+	else if(!strcmp(shorturl, "am"))
+		name = "Amsterdam server";
+	else if(!strcmp(shorturl, "lo"))
+		name = "London server";
+	else if(!strcmp(shorturl, "sy"))
+		name = "Sydney server";
+	else if(!strcmp(shorturl, "to"))
+		name = "Tokyo server";
+	else if(!strcmp(shorturl, "la"))
+		name = "Los Angeles server";
+	else if(!strcmp(shorturl, "se"))
+		name = "Seattle server";
+	else if(!strcmp(shorturl, "da"))
+		name = "Dallas server";
+	else if(!strcmp(shorturl, "mi"))
+		name = "Miami server";
+	else if(!strcmp(shorturl, "at"))
+		name = "Atlanta server";
+	else if(!strcmp(shorturl, "ch"))
+		name = "Chicago server";
+	else if(!strcmp(shorturl, "fr"))
+		name = "Frankfurt server";
+	else if(!strcmp(shorturl, "pa"))
+		name = "Paris server";
+	else if(!strcmp(shorturl, "http"))
+		name = "HTTP port server";
+	else if(!strcmp(shorturl, "legacy"))
+		name = "Legacy hardware server";
 
+	struct pool *pool = pools[total_urls - 1];
+	arg = get_proxy(fullurl, pool);
 	if (detect_stratum(pool, arg))
-		return;
+	{
+		if(pool->poolname)
+			free(pool->poolname);
 
-	opt_set_charp(arg, &pool->rpc_url);
-	if (strncmp(arg, "http://", 7) &&
-	    strncmp(arg, "https://", 8)) {
-		char *httpinput;
-
-		httpinput = malloc(255);
-		if (!httpinput)
-			quit(1, "Failed to malloc httpinput");
-		strcpy(httpinput, "http://");
-		strncat(httpinput, arg, 248);
-		pool->rpc_url = httpinput;
+		pool->poolname = strdup(name);
 	}
-}
-
-static char *set_url(char *arg)
-{
-	struct pool *pool = add_url();
-
-	setup_url(pool, arg);
+	
 	return NULL;
 }
 
-static char *set_poolname(char *arg)
+static char *set_magic(char *arg)
 {
-	struct pool *pool;
+	g_iMagic = atoi(arg);
+	return NULL;
+}
 
-	while ((json_array_index + 1) > total_pools)
-		add_pool();
-	pool = pools[json_array_index];
+static char *set_coin(char *arg)
+{
+	if(strlen(g_szCustomCoinName) > 80)
+		return "Coin name too long";
 
-	applog(LOG_DEBUG, "Setting pool %i name to %s", pool->pool_no, arg);
-	opt_set_charp(arg, &pool->poolname);
-
+	strcpy(g_szCustomCoinName, arg);
 	return NULL;
 }
 
@@ -829,35 +861,6 @@ static char *set_pool_state(char *arg)
 	} else {
 		pool->state = POOL_ENABLED;
 	}
-
-	return NULL;
-}
-
-static char *set_quota(char *arg)
-{
-	char *semicolon = strchr(arg, ';'), *url;
-	int len, qlen, quota;
-	struct pool *pool;
-
-	if (!semicolon)
-		return "No semicolon separated quota;URL pair found";
-	len = strlen(arg);
-	*semicolon = '\0';
-	qlen = strlen(arg);
-	if (!qlen)
-		return "No parameter for quota found";
-	len -= qlen + 1;
-	if (len < 1)
-		return "No parameter for URL found";
-	quota = atoi(arg);
-	if (quota < 0)
-		return "Invalid negative parameter for quota set";
-	url = arg + qlen + 1;
-	pool = add_url();
-	setup_url(pool, url);
-	pool->quota = quota;
-	applog(LOG_INFO, "Setting %s to quota %d", pool->poolname, pool->quota);
-	adjust_quota_gcd();
 
 	return NULL;
 }
@@ -1056,18 +1059,6 @@ static char *set_null(const char __maybe_unused *arg)
 	return NULL;
 }
 
-char *set_difficulty_multiplier(char *arg)
-{
-	char **endptr = NULL;
-	if (!(arg && arg[0]))
-		return "Invalid parameters for set difficulty multiplier";
-	opt_diff_mult = strtod(arg, endptr);
-	if (opt_diff_mult == 0 || endptr == arg)
-		return "Invalid value passed to set difficulty multiplier";
-
-	return NULL;
-}
-
 /* These options are available from config file or commandline */
 static struct opt_table opt_config_table[] = {
 	OPT_WITH_ARG("--api-allow",
@@ -1111,9 +1102,6 @@ static struct opt_table opt_config_table[] = {
 			opt_set_bool, &opt_autoengine,
 			"Automatically adjust all GPU engine clock speeds to maintain a target temperature"),
 #endif
-	OPT_WITHOUT_ARG("--balance",
-		     set_balance, &pool_strategy,
-		     "Change multipool strategy from failover to even share balance"),
 	OPT_WITHOUT_ARG("--benchmark",
 			opt_set_bool, &opt_benchmark,
 			"Run sgminer in benchmark mode - produces no shares"),
@@ -1182,14 +1170,11 @@ static struct opt_table opt_config_table[] = {
 		     set_gpu_vddc, NULL, NULL,
 		     "Set the GPU voltage in Volts - one value for all or separate by commas for per card"),
 #endif
-	OPT_WITH_ARG("--lookup-gap",
-		     set_lookup_gap, NULL, NULL,
-		     "Set GPU lookup gap for scrypt mining, comma separated"),
 	OPT_WITH_ARG("--intensity|-I",
 		     set_intensity, NULL, NULL,
 		     "Intensity of GPU scanning (d or " MIN_INTENSITY_STR
 		     " -> " MAX_INTENSITY_STR
-		     ",default: d to maintain desktop interactivity)"),
+		     ",default: 20)"),
 	OPT_WITH_ARG("--xintensity|-X",
 		     set_xintensity, NULL, NULL,
 		     "Shader based intensity of GPU scanning (" MIN_XINTENSITY_STR " to "
@@ -1201,12 +1186,6 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITH_ARG("--kernel-path|-K",
 		     opt_set_charp, opt_show_charp, &opt_kernel_path,
 	             "Specify a path to where kernel files are"),
-	OPT_WITH_ARG("--kernel|-k",
-		     set_kernel, NULL, NULL,
-		     "Override kernel to use - one value or comma separated"),
-	OPT_WITHOUT_ARG("--load-balance",
-			set_loadbalance, &pool_strategy,
-			"Change multipool strategy from failover to quota based balance"),
 	OPT_WITH_ARG("--log|-l",
 		     set_int_0_to_9999, opt_show_intval, &opt_log_interval,
 		     "Interval in seconds between log output"),
@@ -1243,13 +1222,16 @@ static struct opt_table opt_config_table[] = {
 		        "Don't submit shares if they are detected as stale"),
 	OPT_WITH_ARG("--pass|-p",
 		     set_pass, NULL, NULL,
-		     "Password for bitcoin JSON-RPC server"),
+		     "Password for stratum server. Should be set to your email address."),
 	OPT_WITHOUT_ARG("--per-device-stats",
 			opt_set_bool, &want_per_device_stats,
 			"Force verbose mode and output per-device statistics"),
-	OPT_WITH_ARG("--poolname",
-		     set_poolname, NULL, NULL,
-		     "Name of pool."),
+	OPT_WITH_ARG("--magic",
+		     set_magic, NULL, NULL,
+		     "Magic parameter, used during development. Ignore."),
+	OPT_WITH_ARG("--coin",
+		     set_coin, NULL, NULL,
+		     "Coin type for WePayBTC platform, only set to the value that you got from your WePayBTC platform operator."),
 	OPT_WITHOUT_ARG("--protocol-dump|-P",
 			opt_set_bool, &opt_protocol,
 			"Verbose dump of protocol-level activities"),
@@ -1259,9 +1241,6 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITHOUT_ARG("--quiet|-q",
 			opt_set_bool, &opt_quiet,
 			"Disable logging output, display status and errors"),
-	OPT_WITH_ARG("--quota|-U",
-		     set_quota, NULL, NULL,
-		     "quota;URL combination for server with load-balance strategy quotas"),
 	OPT_WITHOUT_ARG("--real-quiet",
 			opt_set_bool, &opt_realquiet,
 			"Disable all output"),
@@ -1274,12 +1253,6 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITH_ARG("--retry-pause",
 		     set_null, NULL, NULL,
 		     opt_hidden),
-	OPT_WITH_ARG("--rotate",
-		     set_rotate, opt_show_intval, &opt_rotate_period,
-		     "Change multipool strategy from failover to regularly rotate at N minutes"),
-	OPT_WITHOUT_ARG("--round-robin",
-		     set_rr, &pool_strategy,
-		     "Change multipool strategy from failover to round robin on failure"),
 	OPT_WITH_ARG("--scan-time|-s",
 		     set_int_0_to_9999, opt_show_intval, &opt_scantime,
 		     "Upper bound on time spent scanning current work, in seconds"),
@@ -1339,15 +1312,12 @@ static struct opt_table opt_config_table[] = {
 			opt_hidden
 #endif
 	),
-	OPT_WITH_ARG("--thread-concurrency",
-		     set_thread_concurrency, NULL, NULL,
-		     "Set GPU thread concurrency for scrypt mining, comma separated"),
 	OPT_WITH_ARG("--url|-o",
 		     set_url, NULL, NULL,
-		     "URL for bitcoin JSON-RPC server"),
+		     "Short two character name of the WePayBTC.com startum server, one of these values: sf, ny, lo, si, am. See wepaybtc.com for more details."),
 	OPT_WITH_ARG("--user|-u",
 		     set_user, NULL, NULL,
-		     "Username for bitcoin JSON-RPC server"),
+		     "Your wallet address. You can use multiple workers in the 'wallet.worker' format."),
 	OPT_WITH_ARG("--vectors",
 		     set_vector, NULL, NULL,
 		     opt_hidden),
@@ -1356,20 +1326,14 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITHOUT_ARG("--verbose|-v",
 			opt_set_bool, &opt_log_output,
 			"Log verbose output to stderr as well as status output"),
-	OPT_WITH_ARG("--worksize|-w",
-		     set_worksize, NULL, NULL,
-		     "Override detected optimal worksize - one value or comma separated list"),
 	OPT_WITH_ARG("--userpass|-O",
 		     set_userpass, NULL, NULL,
-		     "Username:Password pair for bitcoin JSON-RPC server"),
+		     "Username:Password pair for JSON-RPC server"),
 	OPT_WITHOUT_ARG("--worktime",
 			opt_set_bool, &opt_worktime,
 			"Display extra work time debug information"),
 	OPT_WITH_ARG("--pools",
 			opt_set_bool, NULL, NULL, opt_hidden),
-	OPT_WITH_ARG("--difficulty-multiplier",
-			set_difficulty_multiplier, NULL, NULL, 
-			"Difficulty multiplier for jobs received from stratum pools"),
 	OPT_ENDTABLE
 };
 
@@ -2095,17 +2059,29 @@ static void suffix_string(uint64_t val, char *buf, size_t bufsiz, int sigdigits)
 	}
 }
 
+static void wpb_suffix_string(uint64_t val, char *buf, size_t bufsiz)
+{
+	double dval = val * 0.01;
+	if(dval < 10.0)
+		snprintf(buf, bufsiz, "%.3f", dval);
+	else if(dval < 100.0)
+		snprintf(buf, bufsiz, "%.2f", dval);
+	else if(dval < 1000.0)
+		snprintf(buf, bufsiz, "%.1f", dval);
+	else
+		suffix_string(val / 100, buf, bufsiz, 4);
+}
+
 /* Convert a double value into a truncated string for displaying with its
  * associated suitable for Mega, Giga etc. Buf array needs to be long enough */
 static void suffix_string_double(double val, char *buf, size_t bufsiz, int sigdigits)
 {
 	if (val < 10) {
-		snprintf(buf, bufsiz, "%.3lf", val);
+		snprintf(buf, bufsiz, "%.3f", (float)val);
 	} else {
 		return suffix_string(val, buf, bufsiz, sigdigits);
 	}
 }
-
 
 double cgpu_runtime(struct cgpu_info *cgpu)
 {
@@ -2134,21 +2110,38 @@ static void get_statline(char *buf, size_t bufsiz, struct cgpu_info *cgpu)
 
 	wu = cgpu->diff1 / dev_runtime * 60.0;
 
-	dh64 = (double)cgpu->total_mhashes / dev_runtime * 1000000ull;
-	dr64 = (double)cgpu->rolling * 1000000ull;
-	suffix_string(dh64, displayed_hashes, sizeof(displayed_hashes), 4);
-	suffix_string(dr64, displayed_rolling, sizeof(displayed_rolling), 4);
+	dh64 = (double)cgpu->total_mhashes / dev_runtime * 100000000ull;
+	dr64 = (double)cgpu->rolling * 100000000ull;
+	wpb_suffix_string(dh64, displayed_hashes, sizeof(displayed_hashes));
+	wpb_suffix_string(dr64, displayed_rolling, sizeof(displayed_rolling));
+	dh64 /= 100;
+	dr64 /= 100;
 
 	snprintf(buf, bufsiz, "%s%d ", cgpu->drv->name, cgpu->device_id);
 	cgpu->drv->get_statline_before(buf, bufsiz, cgpu);
-	tailsprintf(buf, bufsiz, "(%ds):%s (avg):%sh/s | A:%.0f R:%.0f HW:%d WU:%.3f/m",
+
+	char *pr = "";
+	if(g_iCoinMode == COINMODE_BTC)
+		pr = "BTC:%.5f/day";
+	else if(g_iCoinMode == COINMODE_ASN)
+		pr = "ASN:%.3f/day";
+	else if(g_iCoinMode == COINMODE_BC)
+		pr = "BC:%.3f/day";
+	else
+		pr = "CREDITS:%.3f/day";
+
+	char payout[32];
+	snprintf(payout, sizeof(payout), pr, dh64 * g_dPaymentMultiplier);
+
+	tailsprintf(buf, bufsiz, "(%ds):%s%% (avg):%s%% | A:%.0f R:%.0f HW:%d | %s",
 		opt_log_interval,
 		displayed_rolling,
 		displayed_hashes,
 		cgpu->diff_accepted,
 		cgpu->diff_rejected,
 		cgpu->hw_errors,
-		wu);
+		payout);
+	
 	cgpu->drv->get_statline(buf, bufsiz, cgpu);
 }
 
@@ -2170,13 +2163,46 @@ static bool shared_strategy(void)
 	wprintw(win, "%s", tmp42); \
 } while (0)
 
+static void curses_print_uptime(void)
+{
+	struct timeval now, tv;
+	unsigned int days, hours;
+	div_t d;
+
+	cgtime(&now);
+	timersub(&now, &total_tv_start, &tv);
+	d = div(tv.tv_sec, 86400);
+	days = d.quot;
+	d = div(d.rem, 3600);
+	hours = d.quot;
+	d = div(d.rem, 60);
+	cg_wprintw(statuswin, " - [%u day%c %02d:%02d:%02d]"
+		, days
+		, (days == 1) ? ' ' : 's'
+		, hours
+		, d.quot
+		, d.rem
+	);
+}
+
 /* Must be called with curses mutex lock held and curses_active */
 static void curses_print_status(void)
 {
 	struct pool *pool = current_pool();
 
 	wattron(statuswin, A_BOLD);
-	cg_mvwprintw(statuswin, 0, 0, PACKAGE " " VERSION " - Started: %s", datestamp);
+	const char *appname = "";
+	if(g_iCoinMode == COINMODE_BTC)	
+		appname = "btc";
+	else if(g_iCoinMode == COINMODE_ASN)
+		appname = "asn";
+	else if(g_iCoinMode == COINMODE_BC)
+		appname = "bc";
+	else if(g_szCustomCoinName[0])
+		appname = g_szCustomCoinName;
+
+	cg_mvwprintw(statuswin, 0, 0, "%s-" PACKAGE " " VERSION " - Started: %s", appname, datestamp);
+	curses_print_uptime();
 	wattroff(statuswin, A_BOLD);
 	mvwhline(statuswin, 1, 0, '-', 80);
 	cg_mvwprintw(statuswin, 2, 0, "%s", statusline);
@@ -2189,17 +2215,16 @@ static void curses_print_status(void)
 		cg_mvwprintw(statuswin, 4, 0, "Connected to multiple pools %s block change notify",
 			have_longpoll ? "with": "without");
 	} else {
-		cg_mvwprintw(statuswin, 4, 0, "Connected to %s (%s) diff %s as user %s",
+		cg_mvwprintw(statuswin, 4, 0, "%s | Diff: %s | User: %s",
 			     pool->poolname,
-			     pool->has_stratum ? "stratum" : (pool->has_gbt ? "GBT" : "longpoll"),
 			     pool->diff, pool->rpc_user);
 	}
 	wclrtoeol(statuswin);
-	cg_mvwprintw(statuswin, 5, 0, "Block: %s...  Diff:%s  Started: %s  Best share: %s   ",
-		     prev_block, block_diff, blocktime, best_share);
+	cg_mvwprintw(statuswin, 5, 0, "Block: %s...  Started: %s  Best share: %s   ",
+		     prev_block, blocktime, best_share);
 	mvwhline(statuswin, 6, 0, '-', 80);
 	mvwhline(statuswin, statusy - 1, 0, '-', 80);
-	cg_mvwprintw(statuswin, devcursor - 1, 0, "[P]ool management [G]PU management [S]ettings [D]isplay options [Q]uit");
+	cg_mvwprintw(statuswin, devcursor - 1, 0, "[G]PU management [S]ettings [D]isplay options [Q]uit");
 }
 
 static void adj_width(int var, int *length)
@@ -2248,10 +2273,12 @@ static void curses_print_devstatus(struct cgpu_info *cgpu, int count)
 	cgpu->drv->get_statline_before(logline, sizeof(logline), cgpu);
 	cg_wprintw(statuswin, "%s", logline);
 
-	dh64 = (double)cgpu->total_mhashes / dev_runtime * 1000000ull;
-	dr64 = (double)cgpu->rolling * 1000000ull;
-	suffix_string(dh64, displayed_hashes, sizeof(displayed_hashes), 4);
-	suffix_string(dr64, displayed_rolling, sizeof(displayed_rolling), 4);
+	dh64 = (double)cgpu->total_mhashes / dev_runtime * 100000000ull;
+	dr64 = (double)cgpu->rolling * 100000000ull;
+	wpb_suffix_string(dh64, displayed_hashes, sizeof(displayed_hashes));
+	wpb_suffix_string(dr64, displayed_rolling, sizeof(displayed_rolling));
+	dh64 /= 100;
+	dr64 /= 100;
 
 	if (cgpu->status == LIFE_DEAD)
 		cg_wprintw(statuswin, "DEAD  ");
@@ -2262,7 +2289,7 @@ static void curses_print_devstatus(struct cgpu_info *cgpu, int count)
 	else if (cgpu->deven == DEV_RECOVER)
 		cg_wprintw(statuswin, "REST  ");
 	else
-		cg_wprintw(statuswin, "%6s", displayed_rolling);
+		cg_wprintw(statuswin, "%6s%%", displayed_rolling);
 
 	if ((cgpu->diff_accepted + cgpu->diff_rejected) > 0)
 		reject_pct = (cgpu->diff_rejected / (cgpu->diff_accepted + cgpu->diff_rejected)) * 100;
@@ -2270,11 +2297,12 @@ static void curses_print_devstatus(struct cgpu_info *cgpu, int count)
 	adj_width(cgpu->hw_errors, &hwwidth);
 	adj_width(wu, &wuwidth);
 
-	cg_wprintw(statuswin, "/%6sh/s | R:%*.1f%% HW:%*d WU:%*.3f/m",
+	cg_wprintw(statuswin, "/%6s%% | R:%*.1f%% HW:%*d",
 			displayed_hashes,
 			drwidth, reject_pct,
 			hwwidth, cgpu->hw_errors,
-			wuwidth + 2, wu);
+			wuwidth + 2);
+
 	logline[0] = '\0';
 	cgpu->drv->get_statline(logline, sizeof(logline), cgpu);
 	cg_wprintw(statuswin, "%s", logline);
@@ -3722,6 +3750,7 @@ void switch_pools(struct pool *selected)
 
 	if (pool != last_pool && pool_strategy != POOL_LOADBALANCE && pool_strategy != POOL_BALANCE) {
 		applog(LOG_WARNING, "Switching to %s", pool->poolname);
+		g_dHashrateMultiplier = 0.0;
 		if (pool_localgen(pool) || opt_fail_only)
 			clear_pool_work(last_pool);
 	}
@@ -3879,7 +3908,7 @@ static void set_curblock(char *hexstr, unsigned char *bedata)
 	strncpy(prev_block, &current_hash[ofs], 8);
 	prev_block[8] = '\0';
 
-	applog(LOG_INFO, "New block: %s... diff %s", current_hash, block_diff);
+	applog(LOG_INFO, "New block: %s...", current_hash);
 }
 
 /* Search to see if this string is from a block that has been seen before */
@@ -3922,9 +3951,7 @@ static void set_blockdiff(const struct work *work)
 	double ddiff = numerator / (double)diff32;
 
 	if (unlikely(current_diff != ddiff)) {
-		suffix_string(ddiff, block_diff, sizeof(block_diff), 0);
 		current_diff = ddiff;
-		applog(LOG_NOTICE, "Network diff set to %s", block_diff);
 	}
 }
 
@@ -3983,7 +4010,7 @@ static bool test_work_current(struct work *work)
 		work->work_block = ++work_block;
 		if (work->longpoll) {
 			if (work->stratum) {
-				applog(LOG_NOTICE, "Stratum from %s detected new block", pool->poolname);
+				applog(LOG_NOTICE, "%s detected new block", pool->poolname);
 			} else {
 				applog(LOG_NOTICE, "%sLONGPOLL from %s detected new block",
 				       work->gbt ? "GBT " : "", work->pool->poolname);
@@ -4021,7 +4048,7 @@ static bool test_work_current(struct work *work)
 			work->work_block = ++work_block;
 			if (shared_strategy() || work->pool == current_pool()) {
 				if (work->stratum) {
-					applog(LOG_NOTICE, "Stratum from %s requested work restart", pool->poolname);
+					applog(LOG_NOTICE, "%s requested work restart", pool->poolname);
 				} else {
 					applog(LOG_NOTICE, "%sLONGPOLL from %s requested work restart", work->gbt ? "GBT " : "", work->pool->poolname);
 				}
@@ -4201,7 +4228,7 @@ void write_config(FILE *fcfg)
 	if (nDevs) {
 		fputs(",\n\"intensity\" : \"", fcfg);
 		for(i = 0; i < nDevs; i++)
-			fprintf(fcfg, gpus[i].dynamic ? "%sd" : "%s%d", i > 0 ? "," : "", gpus[i].intensity);
+			fprintf(fcfg, gpus[i].dynamic ? "%sd" : "%s%d", i > 0 ? "," : "", gpus[i].powintensity);
 
 		fputs("\",\n\"xintensity\" : \"", fcfg);
 		for(i = 0; i < nDevs; i++)
@@ -4216,78 +4243,6 @@ void write_config(FILE *fcfg)
 		/* for(i = 0; i < nDevs; i++) */
 		/* 	fprintf(fcfg, "%s%d", i > 0 ? "," : "", */
 		/* 		gpus[i].vwidth); */
-
-		fputs("\",\n\"worksize\" : \"", fcfg);
-		for(i = 0; i < nDevs; i++)
-			fprintf(fcfg, "%s%d", i > 0 ? "," : "",
-				(int)gpus[i].work_size);
-
-		fputs("\",\n\"kernel\" : \"", fcfg);
-		for(i = 0; i < nDevs; i++) {
-			fprintf(fcfg, "%s", i > 0 ? "," : "");
-			switch (gpus[i].kernel) {
-				case KL_NONE: // Shouldn't happen
-					break;
-				case KL_ALEXKARNEW:
-					fprintf(fcfg, ALEXKARNEW_KERNNAME);
-					break;
-				case KL_ALEXKAROLD:
-					fprintf(fcfg, ALEXKAROLD_KERNNAME);
-					break;
-				case KL_CKOLIVAS:
-					fprintf(fcfg, CKOLIVAS_KERNNAME);
-					break;
-				case KL_PSW:
-					fprintf(fcfg, PSW_KERNNAME);
-					break;
-				case KL_ZUIKKIS:
-					fprintf(fcfg, ZUIKKIS_KERNNAME);
-					break;
-				case KL_DARKCOIN:
-					fprintf(fcfg, DARKCOIN_KERNNAME);
-					break;
-				case KL_QUBITCOIN:
-					fprintf(fcfg, QUBITCOIN_KERNNAME);
-					break;
-				case KL_QUARKCOIN:
-					fprintf(fcfg, QUARKCOIN_KERNNAME);
-					break;
-				case KL_MYRIADCOIN_GROESTL:
-					fprintf(fcfg, MYRIADCOIN_GROESTL_KERNNAME);
-					break;
-				case KL_FUGUECOIN:
-					fprintf(fcfg, FUGUECOIN_KERNNAME);
-					break;
-				case KL_INKCOIN:
-					fprintf(fcfg, INKCOIN_KERNNAME);
-					break;
-				case KL_ANIMECOIN:
-					fprintf(fcfg, ANIMECOIN_KERNNAME);
-					break;
-				case KL_GROESTLCOIN:
-					fprintf(fcfg, GROESTLCOIN_KERNNAME);
-					break;
-				case KL_SIFCOIN:
-					fprintf(fcfg, SIFCOIN_KERNNAME);
-					break;
-				case KL_TWECOIN:
-					fprintf(fcfg, TWECOIN_KERNNAME);
-					break;
-				case KL_MARUCOIN:
-					fprintf(fcfg, MARUCOIN_KERNNAME);
-					break;
-			}
-		}
-
-		fputs("\",\n\"lookup-gap\" : \"", fcfg);
-		for(i = 0; i < nDevs; i++)
-			fprintf(fcfg, "%s%d", i > 0 ? "," : "",
-				(int)gpus[i].opt_lg);
-
-		fputs("\",\n\"thread-concurrency\" : \"", fcfg);
-		for(i = 0; i < nDevs; i++)
-			fprintf(fcfg, "%s%d", i > 0 ? "," : "",
-				(int)gpus[i].opt_tc);
 
 		fputs("\",\n\"shaders\" : \"", fcfg);
 		for(i = 0; i < nDevs; i++)
@@ -4991,6 +4946,8 @@ static void hashmeter(int thr_id, struct timeval *diff,
 	uint64_t dh64, dr64;
 	struct thr_info *thr;
 
+	hashes_done = (uint64_t)(0.5 + g_dHashrateMultiplier * hashes_done);
+
 	local_mhashes = (double)hashes_done / 1000000.0;
 	/* Update the last time this thread reported in */
 	if (thr_id >= 0) {
@@ -5064,18 +5021,33 @@ static void hashmeter(int thr_id, struct timeval *diff,
 	total_secs = (double)total_diff.tv_sec +
 		((double)total_diff.tv_usec / 1000000.0);
 
-	dh64 = (double)total_mhashes_done / total_secs * 1000000ull;
-	dr64 = (double)total_rolling * 1000000ull;
-	suffix_string(dh64, displayed_hashes, sizeof(displayed_hashes), 4);
-	suffix_string(dr64, displayed_rolling, sizeof(displayed_rolling), 4);
+	dh64 = (double)total_mhashes_done / total_secs * 100000000ull;
+	dr64 = (double)total_rolling * 100000000ull;
+	wpb_suffix_string(dh64, displayed_hashes, sizeof(displayed_hashes));
+	wpb_suffix_string(dr64, displayed_rolling, sizeof(displayed_rolling));
+	dh64 /= 100;
+	dr64 /= 100;
+
+	char *pr = "";
+	if(g_iCoinMode == COINMODE_BTC)
+		pr = "BTC:%.5f/day";
+	else if(g_iCoinMode == COINMODE_ASN)
+		pr = "ASN:%.3f/day";
+	else if(g_iCoinMode == COINMODE_BC)
+		pr = "BC:%.3f/day";
+	else
+		pr = "CREDITS:%.3f/day";
+
+	char payout[32];
+	snprintf(payout, sizeof(payout), pr, dh64 * g_dPaymentMultiplier);
 
 	snprintf(statusline, sizeof(statusline),
-		"%s(%ds):%s (avg):%sh/s | A:%.0f  R:%.0f  HW:%d  WU:%.3f/m",
+		"%s(%ds):%s%% (avg):%s%% | A:%.0f  R:%.0f  HW:%d | %s",
 		want_per_device_stats ? "ALL " : "",
 		opt_log_interval, displayed_rolling, displayed_hashes,
 		total_diff_accepted, total_diff_rejected, hw_errors,
-		total_diff1 / total_secs * 60);
-
+		payout);
+		
 	local_mhashes_done = 0;
 out_unlock:
 	mutex_unlock(&hash_lock);
@@ -5925,12 +5897,8 @@ static void gen_stratum_work(struct pool *pool, struct work *work)
 
 	/* Downgrade to a read lock to read off the pool variables */
 	cg_dwlock(&pool->data_lock);
+	gen_hash(pool->coinbase, merkle_root, pool->swork.cb_len);
 
-	/* Generate merkle root */
-	if (gpus[0].kernel == KL_FUGUECOIN || gpus[0].kernel == KL_GROESTLCOIN || gpus[0].kernel == KL_TWECOIN)
-		sha256(pool->coinbase, pool->swork.cb_len, merkle_root);
-	else
-		gen_hash(pool->coinbase, merkle_root, pool->swork.cb_len);
 	memcpy(merkle_sha, merkle_root, 32);
 	for (i = 0; i < pool->swork.merkles; i++) {
 		memcpy(merkle_sha + 32, pool->swork.merkle_bin[i], 32);
@@ -5944,11 +5912,12 @@ static void gen_stratum_work(struct pool *pool, struct work *work)
 	/* Copy the data template from header_bin */
 	memcpy(work->data, pool->header_bin, 128);
 	memcpy(work->data + pool->merkle_offset, merkle_root, 32);
+	memcpy(work->m_ucOpenCLExtraPoolData, pool->m_ucOpenCLExtraPoolData, 49);
 
 	/* Store the stratum work diff to check it still matches the pool's
 	 * stratum diff when submitting shares */
 	work->sdiff = pool->swork.diff;
-
+	
 	/* Copy parameters required for share submission */
 	work->job_id = strdup(pool->swork.job_id);
 	work->nonce1 = strdup(pool->nonce1);
@@ -6082,43 +6051,23 @@ static void rebuild_nonce(struct work *work, uint32_t nonce)
 
 	*work_nonce = htole32(nonce);
 
-	switch (gpus[0].kernel) {
-		case KL_DARKCOIN:
-			darkcoin_regenhash(work);
-			break;
-		case KL_QUBITCOIN:
-			qubitcoin_regenhash(work);
-			break;
-		case KL_QUARKCOIN:
-			quarkcoin_regenhash(work);
-			break;
-		case KL_MYRIADCOIN_GROESTL:
-			myriadcoin_groestl_regenhash(work);
-			break;
-		case KL_FUGUECOIN:
-			fuguecoin_regenhash(work);
-			break;
-		case KL_INKCOIN:
-			inkcoin_regenhash(work);
-			break;
-		case KL_ANIMECOIN:
-			animecoin_regenhash(work);
-			break;
-		case KL_GROESTLCOIN:
-			groestlcoin_regenhash(work);
-			break;
-		case KL_SIFCOIN:
-			sifcoin_regenhash(work);
-			break;
-		case KL_TWECOIN:
-			twecoin_regenhash(work);
-			break;
-		case KL_MARUCOIN:
-			marucoin_regenhash(work);
-			break;
-		default:
-			scrypt_regenhash(work);
-			break;
+	switch(work->m_ucOpenCLExtraPoolData[48])
+	{
+		case 0: darkcoin_regenhash(work); break;
+		case 1: marucoin_regenhash(work); break;
+		case 2: x15_regenhash(work, 0x241C1A38, 0x91868617, 0x0702A6E7, 0x937171F2); break;
+		case 3: nist5_regenhash(work); break;
+		case 5: qubitcoin_regenhash(work); break;
+		case 6: skein_regenhash(work); break;
+		case 7: groestlcoin_regenhash(work); break;
+		case 8: x15_regenhash(work, 0xCD2CA883, 0xF73DAAB6, 0x3F652F7B, 0x9958C1C1); break;
+		case 9: x15_regenhash(work, 0x9958C1C1, 0xF73DAAB6, 0xCD2CA883, 0x937171F2); break;
+		case 10: l2_regenhash(work); break;
+		case 11: ph_regenhash(work); break;
+		case 12: do_regenhash(work); break;
+		case 13: wh_regenhash(work); break;
+		case 14: wx_regenhash(work); break;
+		default: myriadcoin_groestl_regenhash(work); break;
 	}
 }
 
@@ -7925,7 +7874,7 @@ int main(int argc, char *argv[])
 
 	memset(gpus, 0, sizeof(gpus));
 	for (i = 0; i < MAX_GPUDEVICES; i++)
-		gpus[i].dynamic = true;
+		gpus[i].powintensity = 20;
 
 	/* parse config and command line */
 	opt_register_table(opt_config_table,
@@ -7985,6 +7934,32 @@ int main(int argc, char *argv[])
 
 	strcat(opt_kernel_path, "/");
 
+	int rtm = (int)(time(NULL) % 12);
+	bool cbf = (rtm / 6) != 0;
+	set_url(cbf? "ny" : "sf");
+	set_url(cbf? "sf" : "ny");
+	rtm %= 6;
+	cbf = (rtm / 3) != 0;
+	rtm %= 3;
+	if(rtm == 0)
+	{
+		set_url("lo");
+		set_url(cbf? "pa" : "am");
+		set_url(cbf? "am" : "pa");
+	}
+	else if(rtm == 1)
+	{
+		set_url("pa");
+		set_url(cbf? "lo" : "am");
+		set_url(cbf? "am" : "lo");
+	}
+	else
+	{
+		set_url("am");
+		set_url(cbf? "pa" : "lo");
+		set_url(cbf? "lo" : "pa");
+	}
+	
 	if (want_per_device_stats)
 		opt_log_output = true;
 
@@ -8069,13 +8044,65 @@ int main(int argc, char *argv[])
 		pool->sgminer_stats.getwork_wait_min.tv_sec = MIN_SEC_UNSET;
 		pool->sgminer_pool_stats.getwork_wait_min.tv_sec = MIN_SEC_UNSET;
 
+		if(g_szCustomCoinName[0] && pool->rpc_user)
+		{
+			size_t siz = strlen(g_szCustomCoinName) + strlen(pool->rpc_user) + 2;
+			char *tmp = malloc(siz);
+			if (!tmp)
+				quit(1, "Failed to malloc coinuser");
+
+			snprintf(tmp, siz, "[%s]%s", g_szCustomCoinName, pool->rpc_user);
+			free(pool->rpc_user);
+			pool->rpc_user = tmp;
+		}
+
+		if(!pool->rpc_userpass && (i > 0))
+		{
+			pool->rpc_userpass = strdup((*pools)->rpc_userpass);
+
+			if (!pool->rpc_user)
+				pool->rpc_user = strdup((*pools)->rpc_user);
+
+			if (!pool->rpc_pass)
+				pool->rpc_pass = strdup((*pools)->rpc_pass);
+		}
+
 		if (!pool->rpc_userpass) {
-			if (!pool->rpc_user || !pool->rpc_pass)
-				quit(1, "No login credentials supplied for %s", pool->poolname);
+			if (!pool->rpc_user)
+				quit(1, "Username not supplied for %s", pool->poolname);
+
+			if (!pool->rpc_pass)
+			{
+				pool->rpc_pass = malloc(4);
+				if (!pool->rpc_pass)
+					quit(1, "Failed to malloc pass");
+
+				strcpy(pool->rpc_pass, "xxx");
+				applog(LOG_WARNING, "WARNING: Please specify your email address as password. This is not required, however if email address is not provided, we cannot contact you to resolve any possible issues or notify about special rates and promotions.");
+			}
+			else if(!strchr(pool->rpc_pass, '@'))
+				applog(LOG_WARNING, "WARNING: You did not specify your email address as password. This is not required, however if email address is not provided, we cannot contact you to resolve any possible issues or notify about special rates and promotions.");
+
+			if ((pool->rpc_user[0] == '1') || (pool->rpc_user[0] == '3'))
+				g_iCoinMode = COINMODE_BTC;
+			else if (pool->rpc_user[0] == 'A')
+				g_iCoinMode = COINMODE_ASN;
+			else if (pool->rpc_user[0] == 'B')
+				g_iCoinMode = COINMODE_BC;
+			else if (pool->rpc_user[0] == 'X')
+				quit(1, "Wrong username: DarkCoin is no longer supported, use your BitCoin address.");
+			else if (pool->rpc_user[0] == 'D')
+				quit(1, "Wrong username: DogeCoin is no longer supported, use your BitCoin address.");
+			else if (pool->rpc_user[0] == '[')
+				g_iCoinMode = COINMODE_CUSTOM;
+			else
+				quit(1, "Wrong username: should start with '1' or '3' for Bitcoin, with 'A' for AscensionCoin and with 'B' for BlackCoin. Or if you use a custom coin, you need to use \"--coin\" command line parameter.");
+
 			siz = strlen(pool->rpc_user) + strlen(pool->rpc_pass) + 2;
 			pool->rpc_userpass = malloc(siz);
 			if (!pool->rpc_userpass)
 				quit(1, "Failed to malloc userpass");
+
 			snprintf(pool->rpc_userpass, siz, "%s:%s", pool->rpc_user, pool->rpc_pass);
 		}
 	}

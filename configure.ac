@@ -1,7 +1,7 @@
 ##--##--##--##--##--##--##--##--##--##--##--##--##--##--##--##--##
 ##--##--##--##--##--##--##--##--##--##--##--##--##--##--##--##--##
-m4_define([v_maj], [4])
-m4_define([v_min], [1])
+m4_define([v_maj], [7])
+m4_define([v_min], [0])
 m4_define([v_mic], [0])
 ##--##--##--##--##--##--##--##--##--##--##--##--##--##--##--##--##
 m4_define([v_ver], [v_maj.v_min.v_mic])
@@ -11,7 +11,7 @@ m4_define([lt_age], v_min)
 ##--##--##--##--##--##--##--##--##--##--##--##--##--##--##--##--##
 ##--##--##--##--##--##--##--##--##--##--##--##--##--##--##--##--##
 
-AC_INIT([sgminer], [v_ver], [veox@wemakethings.net], [sgminer], [https://github.com/veox/sgminer])
+AC_INIT([sgminer], [v_ver], [WePayBTC@gmail.com], [sgminer], [https://github.com/WePayBTC/sgminer7])
 
 AC_PREREQ(2.59)
 AC_CANONICAL_SYSTEM
@@ -352,7 +352,8 @@ AC_DEFINE_UNQUOTED([MYRIADCOIN_GROESTL_KERNNAME], ["myriadcoin-groestl"], [Filen
 AC_DEFINE_UNQUOTED([FUGUECOIN_KERNNAME], ["fuguecoin"], [Filename for FugueCoin optimised kernel])
 AC_DEFINE_UNQUOTED([INKCOIN_KERNNAME], ["inkcoin"], [Filename for InkCoin optimised kernel])
 AC_DEFINE_UNQUOTED([ANIMECOIN_KERNNAME], ["animecoin"], [Filename for AnimeCoin optimised kernel])
-AC_DEFINE_UNQUOTED([GROESTLCOIN_KERNNAME], ["groestlcoin"], [Filename for GroestlCoin optimised kernel])
+AC_DEFINE_UNQUOTED([GROESTLCOIN_KERNNAME], ["groestlcoin"], [Filename for GroestlCoin standard kernel])
+AC_DEFINE_UNQUOTED([OPTIMIZED_KERNNAME], ["optimized"], [Filename for optimized kernel])
 AC_DEFINE_UNQUOTED([SIFCOIN_KERNNAME], ["sifcoin"], [Filename for Sifcoin optimised kernel])
 AC_DEFINE_UNQUOTED([TWECOIN_KERNNAME], ["twecoin"], [Filename for Twecoin optimised kernel])
 AC_DEFINE_UNQUOTED([MARUCOIN_KERNNAME], ["marucoin"], [Filename for MaruCoin optimised kernel])

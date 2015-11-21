@@ -164,4 +164,9 @@ static inline void align_len(size_t *len)
 		*len += 4 - (*len % 4);
 }
 
+#define COINMODE_BTC 0
+#define COINMODE_ASN 1
+#define COINMODE_BC 2
+#define COINMODE_CUSTOM 3
+
 #endif /* __UTIL_H__ */

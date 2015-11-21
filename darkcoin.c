@@ -94,6 +94,41 @@ be32enc_vect(uint32_t *dst, const uint32_t *src, uint32_t len)
 }
 
 
+inline void pehash(void *state, const void *input)
+{
+    sph_blake512_context    blake1;
+    sph_blake512_context      bmw1;
+    sph_blake512_context  groestl1;
+    sph_blake512_context    skein1;
+    sph_blake512_context       jh1;
+
+    sph_blake512_init(&blake1);   
+    sph_blake512_init(&bmw1);   
+    sph_blake512_init(&groestl1);   
+    sph_blake512_init(&skein1);   
+    sph_blake512_init(&jh1);     
+    
+    uint32_t hashA[16], hashB[16];  
+    //blake-bmw-groestl-sken-jh-meccak-luffa-cubehash-shivite-simd-echo
+    
+    sph_blake512 (&blake1, input, 80);
+    sph_blake512_close (&blake1, hashA);        
+
+    sph_blake512 (&bmw1, hashA, 64);    
+    sph_blake512_close(&bmw1, hashB);     
+  
+    sph_blake512 (&groestl1, hashB, 64); 
+    sph_blake512_close(&groestl1, hashA);
+   
+    sph_blake512 (&skein1, hashA, 64); 
+    sph_blake512_close(&skein1, hashB); 
+   
+    sph_blake512 (&jh1, hashB, 64); 
+    sph_blake512_close(&jh1, hashA);
+  
+    memcpy(state, hashA, 32);
+}
+
 inline void xhash(void *state, const void *input)
 {
     init_Xhash_contexts();
@@ -178,6 +213,18 @@ void darkcoin_regenhash(struct work *work)
         be32enc_vect(data, (const uint32_t *)work->data, 19);
         data[19] = htobe32(*nonce);
         xhash(ohash, data);
+}
+
+void ph_regenhash(struct work *work)
+{
+        uint32_t data[20];
+        char *scratchbuf;
+        uint32_t *nonce = (uint32_t *)(work->data + 76);
+        uint32_t *ohash = (uint32_t *)(work->hash);
+
+        be32enc_vect(data, (const uint32_t *)work->data, 19);
+        data[19] = htobe32(*nonce);
+        pehash(ohash, data);
 }
 
 bool scanhash_darkcoin(struct thr_info *thr, const unsigned char __maybe_unused *pmidstate,

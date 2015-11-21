@@ -45,7 +45,9 @@
 #include "util.h"
 
 #define DEFAULT_SOCKWAIT 60
-extern double opt_diff_mult;
+extern double g_dHashrateMultiplier;
+extern double g_dPaymentMultiplier;
+extern int g_iCoinMode;
 
 bool successful_connect = false;
 static void keep_sockalive(SOCKETTYPE fd)
@@ -1496,12 +1498,15 @@ static char *blank_merkel = "000000000000000000000000000000000000000000000000000
 static bool parse_notify(struct pool *pool, json_t *val)
 {
 	char *job_id, *prev_hash, *coinbase1, *coinbase2, *bbversion, *nbit,
-	     *ntime, *header;
+	     *ntime, *header, *szExtraKernelParams;
 	size_t cb1_len, cb2_len, alloc_len;
 	unsigned char *cb1, *cb2;
 	bool clean, ret = false;
 	int merkles, i;
 	json_t *arr;
+
+
+	unsigned char aPoolExtraParams[64];
 
 	arr = json_array_get(val, 4);
 	if (!arr || !json_is_array(arr))
@@ -1517,6 +1522,45 @@ static bool parse_notify(struct pool *pool, json_t *val)
 	nbit = json_array_string(val, 6);
 	ntime = json_array_string(val, 7);
 	clean = json_is_true(json_array_get(val, 8));
+	szExtraKernelParams = json_array_string(val, 9);
+
+	memset(aPoolExtraParams, 0, sizeof(aPoolExtraParams));
+	if (szExtraKernelParams)
+	{
+		if(strlen(szExtraKernelParams) >= (2 * sizeof(aPoolExtraParams)))//decode the extra values provided by some pools
+			hex2bin(aPoolExtraParams, szExtraKernelParams, sizeof(aPoolExtraParams));
+
+		free(szExtraKernelParams);
+	}
+
+	if(aPoolExtraParams[0] > 7)
+		applog(LOG_NOTICE, "New version of sgminer is available, please update");
+
+	if(aPoolExtraParams[1] > 14)
+		applog(LOG_NOTICE, "Unsupported algorithm (%u), you need to update your miner", (unsigned int)aPoolExtraParams[1]);
+
+	if((pool == current_pool()) || (g_dHashrateMultiplier == 0.0))
+	{
+		double b1 = g_dHashrateMultiplier;
+		g_dHashrateMultiplier = ((65536.0 * aPoolExtraParams[2]) + (256.0 * aPoolExtraParams[3]) + aPoolExtraParams[4]) / 16777215000.0;
+		if ((g_dHashrateMultiplier <= 0.0) || (g_dHashrateMultiplier > 1.0))
+			g_dHashrateMultiplier = 0.0;
+
+		double b2 = g_dPaymentMultiplier;
+		g_dPaymentMultiplier = ((65536.0 * aPoolExtraParams[5]) + (256.0 * aPoolExtraParams[6]) + aPoolExtraParams[7]) / 10000000000.0;
+		if(g_iCoinMode == COINMODE_CUSTOM)
+			g_dPaymentMultiplier *= 1000.0;
+		else if(g_iCoinMode == COINMODE_ASN)
+			g_dPaymentMultiplier *= 0.01 * ((16777216.0 * aPoolExtraParams[8]) + (65536.0 * aPoolExtraParams[9]) + (256.0 * aPoolExtraParams[10]) + aPoolExtraParams[11]);
+		else if(g_iCoinMode == COINMODE_BC)
+			g_dPaymentMultiplier *= 0.01 * ((16777216.0 * aPoolExtraParams[12]) + (65536.0 * aPoolExtraParams[13]) + (256.0 * aPoolExtraParams[14]) + aPoolExtraParams[15]);
+
+		if((b1 != g_dHashrateMultiplier) || (b2 != g_dPaymentMultiplier))
+			zero_stats();
+	}
+
+	memcpy(pool->m_ucOpenCLExtraPoolData, aPoolExtraParams + 16, 48);
+	pool->m_ucOpenCLExtraPoolData[48] = aPoolExtraParams[1];
 
 	if (!job_id || !prev_hash || !coinbase1 || !coinbase2 || !bbversion || !nbit || !ntime) {
 		/* Annoying but we must not leak memory */
@@ -1642,8 +1686,8 @@ out:
 static bool parse_diff(struct pool *pool, json_t *val)
 {
 	double old_diff, diff;
-
-	diff = json_number_value(json_array_get(val, 0)) * opt_diff_mult;
+	
+	diff = json_number_value(json_array_get(val, 0));
 	if (diff == 0)
 		return false;
 
@@ -1654,11 +1698,10 @@ static bool parse_diff(struct pool *pool, json_t *val)
 
 	if (old_diff != diff) {
 		int idiff = diff;
-
 		if ((double)idiff == diff)
-			applog(LOG_NOTICE, "%s difficulty changed to %d", pool->poolname ,idiff);
+			applog(LOG_DEBUG, "%s difficulty changed to %d", pool->poolname, idiff);
 		else
-			applog(LOG_NOTICE, "%s difficulty changed to %.3f", pool->poolname, diff);
+			applog(LOG_DEBUG, "%s difficulty changed to %.3f", pool->poolname, diff);
 	} else
 		applog(LOG_DEBUG, "%s difficulty set to %f", pool->poolname, diff);
 
@@ -1797,7 +1840,7 @@ bool parse_method(struct pool *pool, char *s)
 		return ret;
 	}
 
-	if (!strncasecmp(buf, "mining.set_difficulty", 21) && parse_diff(pool, params)) {
+	if (!strncasecmp(buf, "msd", 3) && parse_diff(pool, params)) {
 		ret = true;
 		json_decref(val);
 		return ret;
@@ -1831,7 +1874,7 @@ bool auth_stratum(struct pool *pool)
 	json_error_t err;
 	bool ret = false;
 
-	sprintf(s, "{\"id\": %d, \"method\": \"mining.authorize\", \"params\": [\"%s\", \"%s\"]}",
+	sprintf(s, "{\"id\": %d, \"method\": \"ma7\", \"params\": [\"%s\", \"%s\"]}",
 		swork_id++, pool->rpc_user, pool->rpc_pass);
 
 	if (!stratum_send(pool, s, strlen(s)))

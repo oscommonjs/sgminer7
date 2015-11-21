@@ -374,26 +374,6 @@ enum dev_enable {
 	DEV_RECOVER,
 };
 
-enum cl_kernels {
-	KL_NONE,
-	KL_ALEXKARNEW,	// kernels starting from this will have difficulty calculated by using litecoin algorithm
-	KL_ALEXKAROLD,
-	KL_CKOLIVAS,
-	KL_PSW,
-	KL_ZUIKKIS,
-	KL_QUARKCOIN,	// kernels starting from this will have difficulty calculated by using quarkcoin algorithm
-	KL_QUBITCOIN,
-	KL_INKCOIN,
-	KL_ANIMECOIN,
-	KL_SIFCOIN,
-	KL_DARKCOIN,	// kernels starting from this will have difficulty calculated by using bitcoin algorithm
-	KL_MYRIADCOIN_GROESTL,
-	KL_FUGUECOIN,
-	KL_GROESTLCOIN,
-	KL_TWECOIN,
-	KL_MARUCOIN,
-};
-
 enum dev_reason {
 	REASON_THREAD_FAIL_INIT,
 	REASON_THREAD_ZERO_HASH,
@@ -478,22 +458,18 @@ struct cgpu_info {
 
 	int64_t max_hashes;
 
-	const char *kname;
 	bool mapped;
 	int virtual_gpu;
 	int virtual_adl;
-	int intensity;
+	int powintensity;
 	int xintensity;
 	int rawintensity;
 	bool dynamic;
 
 	cl_uint vwidth;
 	size_t work_size;
-	enum cl_kernels kernel;
 	cl_ulong max_alloc;
 
-	int opt_lg, lookup_gap;
-	size_t opt_tc, thread_concurrency;
 	size_t shaders;
 	struct timeval tv_gpustart;
 	int intervals;
@@ -1305,6 +1281,8 @@ struct pool {
 	int merkle_offset;
 
 	struct timeval tv_lastwork;
+
+	unsigned char m_ucOpenCLExtraPoolData[49];//48 extra bytes that are sent to the OpenCL kernel
 };
 
 #define GETWORK_MODE_TESTPOOL 'T'
@@ -1374,6 +1352,8 @@ struct work {
 	struct timeval	tv_work_start;
 	struct timeval	tv_work_found;
 	char		getwork_mode;
+
+	unsigned char m_ucOpenCLExtraPoolData[49];//48 extra bytes that are sent to the OpenCL kernel
 };
 
 #define TAILBUFSIZ 64

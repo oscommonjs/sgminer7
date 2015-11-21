@@ -1661,7 +1661,7 @@ static void gpustatus(struct io_data *io_data, int gpu, bool isjson, bool precom
 		if (cgpu->dynamic)
 			strcpy(intensity, DYNAMIC);
 		else
-			sprintf(intensity, "%d", cgpu->intensity);
+			sprintf(intensity, "%d", cgpu->powintensity);
 
 		root = api_add_int(root, "GPU", &gpu, false);
 		root = api_add_string(root, "Enabled", enabled, false);
@@ -2464,7 +2464,7 @@ static void gpuintensity(struct io_data *io_data, __maybe_unused SOCKETTYPE c, c
 		}
 
 		gpus[id].dynamic = false;
-		gpus[id].intensity = intensity;
+		gpus[id].powintensity = intensity;
 		sprintf(intensitystr, "%d", intensity);
 	}
 
@@ -2697,7 +2697,6 @@ static void devdetails(struct io_data *io_data, __maybe_unused SOCKETTYPE c, __m
 		root = api_add_string(root, "Name", cgpu->drv->name, false);
 		root = api_add_int(root, "ID", &(cgpu->device_id), false);
 		root = api_add_string(root, "Driver", cgpu->drv->dname, false);
-		root = api_add_const(root, "Kernel", cgpu->kname ? : BLANK, false);
 		root = api_add_const(root, "Model", cgpu->name ? : BLANK, false);
 		root = api_add_const(root, "Device Path", cgpu->device_path ? : BLANK, false);
 

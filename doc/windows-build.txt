@@ -140,7 +140,7 @@ to the next.
 
       adl.sh (optional - see below - skip this entirely)
       autoreconf -fvi
-      CFLAGS="-O2 -msse2" ./configure (additional config options, see below)
+      CFLAGS="-O2 -msse2" ./configure --enable-opencl
       make
       strip sgminer.exe  <== only do this if you are not compiling for debugging
       

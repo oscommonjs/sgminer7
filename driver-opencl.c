@@ -1473,6 +1473,12 @@ static int64_t opencl_scanhash(struct thr_info *thr, struct work *work,
 	set_threads_hashes(clState->vwidth, clState->compute_shaders, &hashes, globalThreads, localThreads[0],
 			   &gpu->powintensity, &gpu->xintensity, &gpu->rawintensity);
 
+	if(work->m_ucOpenCLExtraPoolData[48] == 10)
+	{
+		hashes <<= 1;
+		globalThreads[0] <<= 1;
+	}
+
 	if (hashes > gpu->max_hashes)
 		gpu->max_hashes = hashes;
 
@@ -1487,7 +1493,7 @@ static int64_t opencl_scanhash(struct thr_info *thr, struct work *work,
 		int kid = clState->ep[1 + ki];
 		size_t global_work_offset[1];
 		global_work_offset[0] = work->blk.nonce;
-		
+
 		if(kid == 35)
 			(*globalThreads) <<= 2;
 

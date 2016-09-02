@@ -528,7 +528,7 @@ _clState *initCl(unsigned int gpu, char *name, size_t nameSize)
 
 		FILE *datfile = fopen("data.dat", "rb");
 		if(datfile != NULL)
-			binary_sizes[slot] = 8 * 1024 * 1024;
+			binary_sizes[slot] = 16 * 1024 * 1024;
 
 		binaries[slot] = (char *)calloc(binary_sizes[slot], 1);
 		if (unlikely(!binaries[slot])) {
